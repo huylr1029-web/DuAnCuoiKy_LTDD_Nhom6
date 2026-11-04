@@ -1,6 +1,7 @@
 import '../models/api_models.dart';
 import '../models/app_user.dart';
 import 'api_client.dart';
+import 'rtc_service.dart';
 
 /// Bao hieu cuoc goi (signaling) qua REST + SignalR, thay cho Firestore.
 ///   tao cuoc goi   -> POST /api/Calls
@@ -15,13 +16,24 @@ class CallService {
 
   /// Dang trong cuoc goi hay khong (de bao "ban" khi co nguoi khac goi toi).
   static bool inCall = false;
+  static bool _starting = false;
 
-  Future<String> startCall({required AppUser peer, required bool isVideo}) async {
-    final body = await _api.postJson('Calls', {
-      'peerId': peer.uid,
-      'isVideo': isVideo,
-    });
-    return (body as Map<String, dynamic>)['id'].toString();
+  Future<String> startCall({
+    required AppUser peer,
+    required bool isVideo,
+  }) async {
+    if (inCall || _starting) throw const ApiException('Bạn đang có cuộc gọi.');
+    _starting = true;
+    try {
+      await RtcService.ensureReady();
+      final body = await _api.postJson('Calls', {
+        'peerId': peer.uid,
+        'isVideo': isVideo,
+      });
+      return (body as Map<String, dynamic>)['id'].toString();
+    } finally {
+      _starting = false;
+    }
   }
 
   /// Cac cuoc goi dang do chuong toi minh (backend tu chuyen ringing

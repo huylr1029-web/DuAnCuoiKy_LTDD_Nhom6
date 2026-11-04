@@ -1,0 +1,1 @@
+https://github.com/AgoraIO/Tools/tree/da06bfb83556c597bfcb7db65fa65c975165a130/DynamicKey/AgoraDynamicKey/csharp/src/AgoraIO

@@ -7,6 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../config.dart';
 import '../models/app_user.dart';
 import 'api_client.dart';
+import 'translation_service.dart';
 
 /// Thay cho AuthService Firebase cu: dang ky / dang nhap / Google / quen
 /// mat khau / dang xuat deu goi API ASP.NET, token JWT luu o
@@ -49,14 +50,17 @@ class AuthService {
     _api.currentUser = user;
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('jwt_token', token);
-    await prefs.setString('auth_user', jsonEncode({
-      'uid': user.uid,
-      'name': user.name,
-      'email': user.email,
-      'phone': user.phone,
-      'online': user.online,
-      'avatarUrl': user.avatarUrl,
-    }));
+    await prefs.setString(
+      'auth_user',
+      jsonEncode({
+        'uid': user.uid,
+        'name': user.name,
+        'email': user.email,
+        'phone': user.phone,
+        'online': user.online,
+        'avatarUrl': user.avatarUrl,
+      }),
+    );
     _authController.add(user);
   }
 
@@ -70,14 +74,20 @@ class AuthService {
   }
 
   AppUser _userFromAuthResponse(dynamic body) {
-    final userJson = (body as Map<String, dynamic>)['user'] as Map<String, dynamic>;
+    final userJson =
+        (body as Map<String, dynamic>)['user'] as Map<String, dynamic>;
     return AppUser.fromJson(userJson);
   }
 
   String _tokenFromAuthResponse(dynamic body) =>
       (body as Map<String, dynamic>)['token'].toString();
 
-  Future<void> register(String name, String email, String password, String phone) async {
+  Future<void> register(
+    String name,
+    String email,
+    String password,
+    String phone,
+  ) async {
     final normalized = normalizePhone(phone);
     if (normalized == null) {
       throw StateError('Số điện thoại không hợp lệ');
@@ -89,9 +99,12 @@ class AuthService {
       'name': name.trim(),
       'email': email.trim(),
       'password': password,
-      'phone': phone,
+      'phone': normalized,
     });
-    await _saveSession(_tokenFromAuthResponse(body), _userFromAuthResponse(body));
+    await _saveSession(
+      _tokenFromAuthResponse(body),
+      _userFromAuthResponse(body),
+    );
   }
 
   Future<void> login(String email, String password) async {
@@ -99,7 +112,10 @@ class AuthService {
       'email': email.trim(),
       'password': password,
     });
-    await _saveSession(_tokenFromAuthResponse(body), _userFromAuthResponse(body));
+    await _saveSession(
+      _tokenFromAuthResponse(body),
+      _userFromAuthResponse(body),
+    );
   }
 
   /// Doi ten hien thi / biet danh cua chinh minh.
@@ -114,26 +130,31 @@ class AuthService {
     final user = AppUser.fromJson(body as Map<String, dynamic>);
     _api.currentUser = user;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('auth_user', jsonEncode({
-      'uid': user.uid,
-      'name': user.name,
-      'email': user.email,
-      'phone': user.phone,
-      'online': user.online,
-      'avatarUrl': user.avatarUrl,
-    }));
+    await prefs.setString(
+      'auth_user',
+      jsonEncode({
+        'uid': user.uid,
+        'name': user.name,
+        'email': user.email,
+        'phone': user.phone,
+        'online': user.online,
+        'avatarUrl': user.avatarUrl,
+      }),
+    );
     _authController.add(user);
     return user;
   }
 
   /// Doi anh dai dien: multipart, backend ghi de avatar.jpg.
   /// Sau khi doi, dong bo lai ho so de Avatar hien ngay.
-  Future<void> updateAvatar(String filename, List<int> bytes, String contentType) async {
-    await ApiClient.instance.postMultipart(
-      'Users/me/avatar',
-      {},
-      {'image': (filename: filename, bytes: bytes, contentType: contentType)},
-    );
+  Future<void> updateAvatar(
+    String filename,
+    List<int> bytes,
+    String contentType,
+  ) async {
+    await ApiClient.instance.postMultipart('Users/me/avatar', {}, {
+      'image': (filename: filename, bytes: bytes, contentType: contentType),
+    });
     await me();
   }
 
@@ -141,7 +162,10 @@ class AuthService {
   /// se dang xuat o man hinh Cai dat de nguoi dung dang nhap lai
   /// bang mat khau moi (JWT cu van con han, dang xuat la cach ro
   /// rang nhat de kiem chung mat khau moi).
-  Future<void> changeMyPassword(String currentPassword, String newPassword) async {
+  Future<void> changeMyPassword(
+    String currentPassword,
+    String newPassword,
+  ) async {
     await _api.putJson('Users/me/password', {
       'currentPassword': currentPassword,
       'newPassword': newPassword,
@@ -155,14 +179,17 @@ class AuthService {
     final user = AppUser.fromJson(body as Map<String, dynamic>);
     _api.currentUser = user;
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('auth_user', jsonEncode({
-      'uid': user.uid,
-      'name': user.name,
-      'email': user.email,
-      'phone': user.phone,
-      'online': user.online,
-      'avatarUrl': user.avatarUrl,
-    }));
+    await prefs.setString(
+      'auth_user',
+      jsonEncode({
+        'uid': user.uid,
+        'name': user.name,
+        'email': user.email,
+        'phone': user.phone,
+        'online': user.online,
+        'avatarUrl': user.avatarUrl,
+      }),
+    );
     return user;
   }
 
@@ -203,21 +230,32 @@ class AuthService {
     // xac thuc. Neu de trong, Google se khong tra idToken va ham nay
     // bao loi o duoi thay vi gui token rong len backend.
     await google.initialize(
-      serverClientId: googleServerClientId.isEmpty ? null : googleServerClientId,
+      serverClientId: googleServerClientId.isEmpty
+          ? null
+          : googleServerClientId,
     );
     if (!google.supportsAuthenticate()) {
-      throw StateError('Thiết bị này chưa hỗ trợ đăng nhập Google theo cách này.');
+      throw StateError(
+        'Thiết bị này chưa hỗ trợ đăng nhập Google theo cách này.',
+      );
     }
     final account = await google.authenticate();
     final googleAuth = account.authentication;
     final idToken = googleAuth.idToken;
     if (idToken == null) {
-      throw StateError('Google không trả về ID token. Kiểm tra Web OAuth Client ID (serverClientId), OAuth Android package com.example.nhom6 và SHA-1 của khóa ký APK.');
+      throw StateError(
+        'Google không trả về ID token. Kiểm tra Web OAuth Client ID (serverClientId), OAuth Android package com.example.nhom6 và SHA-1 của khóa ký APK.',
+      );
     }
     // Backend xac thuc idToken voi Google (can Google:ClientId trong
     // appsettings.json), roi cap JWT cua app, khong dung Firebase nua.
-    final body = await _api.postJson('Authenticate/google', {'idToken': idToken});
-    await _saveSession(_tokenFromAuthResponse(body), _userFromAuthResponse(body));
+    final body = await _api.postJson('Authenticate/google', {
+      'idToken': idToken,
+    });
+    await _saveSession(
+      _tokenFromAuthResponse(body),
+      _userFromAuthResponse(body),
+    );
   }
 
   Future<void> sendPasswordResetEmail(String email) async {
@@ -232,6 +270,7 @@ class AuthService {
   }
 
   Future<void> logout() async {
+    TranslationService.instance.clear();
     try {
       await _api.postJson('Authenticate/logout', {});
     } catch (_) {

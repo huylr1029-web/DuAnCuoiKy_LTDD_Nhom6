@@ -3,6 +3,8 @@ import 'dart:convert';
 import 'dart:io';
 
 import 'package:http/http.dart' as http;
+import 'package:http_parser/http_parser.dart';
+import 'package:mime/mime.dart';
 
 import '../config.dart';
 import '../models/app_user.dart';
@@ -25,6 +27,7 @@ class ApiClient {
 
   String? token;
   AppUser? currentUser;
+  static const requestTimeout = Duration(seconds: 60);
 
   Map<String, String> get _headers {
     final headers = <String, String>{
@@ -87,6 +90,11 @@ class ApiClient {
     if (body is Map && body['message'] is String) {
       return body['message'] as String;
     }
+    if (body is Map && body['errors'] is Map) {
+      return (body['errors'] as Map).values
+          .expand((value) => value is List ? value : [value])
+          .join('\n');
+    }
     switch (res.statusCode) {
       case 400:
         return 'Du lieu gui len khong hop le';
@@ -98,6 +106,10 @@ class ApiClient {
         return 'Khong tim thay API (${res.request?.url ?? '404'}). Kiem tra dia chi Conveyor';
       case 409:
         return 'Du lieu da ton tai';
+      case 413:
+        return 'File quá lớn. Vui lòng chọn file nhỏ hơn.';
+      case 429:
+        return 'Bạn đã gửi quá nhiều yêu cầu. Vui lòng đợi một phút rồi thử lại.';
       default:
         return 'May chu tra loi loi ${res.statusCode}';
     }
@@ -105,13 +117,16 @@ class ApiClient {
 
   Never _throwNetwork(Object e) {
     if (e is ApiException) throw e;
+    if (e is TimeoutException) {
+      throw const ApiException('Máy chủ phản hồi quá chậm. Vui lòng thử lại.');
+    }
     if (e is SocketException ||
         e is HttpException ||
         e is http.ClientException ||
         e is TimeoutException) {
       throw ApiException(
         'Khong ket noi duoc toi API ($apiBaseUrl). '
-            'Kiem tra backend va Conveyor dang chay.',
+        'Kiem tra backend va Conveyor dang chay.',
       );
     }
     throw ApiException(e.toString());
@@ -119,7 +134,9 @@ class ApiClient {
 
   Future<dynamic> getJson(String path, {Map<String, String>? query}) async {
     try {
-      final res = await http.get(_uri(path, query), headers: _headers);
+      final res = await http
+          .get(_uri(path, query), headers: _headers)
+          .timeout(requestTimeout);
       final body = _decode(res);
       if (res.statusCode >= 200 && res.statusCode < 300) return body;
       throw ApiException(_errorMessage(res, body), res.statusCode);
@@ -130,11 +147,9 @@ class ApiClient {
 
   Future<dynamic> postJson(String path, Map<String, dynamic> body) async {
     try {
-      final res = await http.post(
-        _uri(path),
-        headers: _headers,
-        body: jsonEncode(body),
-      );
+      final res = await http
+          .post(_uri(path), headers: _headers, body: jsonEncode(body))
+          .timeout(requestTimeout);
       final decoded = _decode(res);
       if (res.statusCode >= 200 && res.statusCode < 300) return decoded;
       throw ApiException(_errorMessage(res, decoded), res.statusCode);
@@ -145,11 +160,9 @@ class ApiClient {
 
   Future<dynamic> putJson(String path, Map<String, dynamic> body) async {
     try {
-      final res = await http.put(
-        _uri(path),
-        headers: _headers,
-        body: jsonEncode(body),
-      );
+      final res = await http
+          .put(_uri(path), headers: _headers, body: jsonEncode(body))
+          .timeout(requestTimeout);
       final decoded = _decode(res);
       if (res.statusCode >= 200 && res.statusCode < 300) return decoded;
       throw ApiException(_errorMessage(res, decoded), res.statusCode);
@@ -160,7 +173,9 @@ class ApiClient {
 
   Future<dynamic> deleteJson(String path) async {
     try {
-      final res = await http.delete(_uri(path), headers: _headers);
+      final res = await http
+          .delete(_uri(path), headers: _headers)
+          .timeout(requestTimeout);
       final decoded = _decode(res);
       if (res.statusCode >= 200 && res.statusCode < 300) return decoded;
       throw ApiException(_errorMessage(res, decoded), res.statusCode);
@@ -171,10 +186,10 @@ class ApiClient {
 
   /// Gui multipart/form-data (dang anh dai dien, Reels...).
   Future<dynamic> postMultipart(
-      String path,
-      Map<String, String> fields,
-      Map<String, ({String filename, List<int> bytes, String contentType})> files,
-      ) async {
+    String path,
+    Map<String, String> fields,
+    Map<String, ({String filename, List<int> bytes, String contentType})> files,
+  ) async {
     try {
       final req = http.MultipartRequest('POST', _uri(path));
       if (token != null && token!.isNotEmpty) {
@@ -182,14 +197,34 @@ class ApiClient {
       }
       req.fields.addAll(fields);
       for (final entry in files.entries) {
-        req.files.add(http.MultipartFile.fromBytes(
-          entry.key,
-          entry.value.bytes,
-          filename: entry.value.filename,
-        ));
+        if (entry.value.bytes.isEmpty) {
+          throw const ApiException('File tải lên trống. Vui lòng chọn lại.');
+        }
+        req.files.add(
+          http.MultipartFile.fromBytes(
+            entry.key,
+            entry.value.bytes,
+            filename: entry.value.filename,
+            contentType: MediaType.parse(
+              lookupMimeType(
+                    entry.value.filename,
+                    headerBytes: entry.value.bytes,
+                  ) ??
+                  entry.value.contentType,
+            ),
+          ),
+        );
       }
-      final streamed = await req.send();
-      final res = await http.Response.fromStream(streamed);
+      final client = http.Client();
+      late http.Response res;
+      try {
+        res = await (() async {
+          final streamed = await client.send(req);
+          return http.Response.fromStream(streamed);
+        })().timeout(const Duration(minutes: 2));
+      } finally {
+        client.close();
+      }
       final decoded = _decode(res);
       if (res.statusCode >= 200 && res.statusCode < 300) return decoded;
       throw ApiException(_errorMessage(res, decoded), res.statusCode);

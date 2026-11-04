@@ -1,11 +1,10 @@
-
 import 'dart:async';
 
 import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-import '../config.dart';
+import '../services/rtc_service.dart';
 import '../models/app_user.dart';
 import '../models/api_models.dart';
 import '../services/call_service.dart';
@@ -92,60 +91,56 @@ class _CallScreenState extends State<CallScreen> {
     });
     _statusTimer = Timer.periodic(
       const Duration(seconds: 2),
-          (_) => _checkCallStatus(),
+      (_) => _checkCallStatus(),
     );
 
     if (widget.isCaller) {
-      _timeoutTimer = Timer(
-        const Duration(seconds: 30),
-            () {
-          if (!_everConnected && !_closing) {
-            _hangUp('missed');
-          }
-        },
-      );
+      _timeoutTimer = Timer(const Duration(seconds: 30), () {
+        if (!_everConnected && !_closing) {
+          _hangUp('missed');
+        }
+      });
     }
 
     _startAgora();
   }
 
   Future<void> _startAgora() async {
-    final perms = await [
-      Permission.microphone,
-      if (widget.isVideo) Permission.camera,
-    ].request();
+    try {
+      final perms = await [
+        Permission.microphone,
+        if (widget.isVideo) Permission.camera,
+      ].request();
 
-    if (perms.values.any((status) => !status.isGranted)) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text(
-              'Cần cấp quyền micro/camera để gọi',
-            ),
-          ),
-        );
+      if (perms.values.any((status) => !status.isGranted)) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Cần cấp quyền micro/camera để gọi')),
+          );
+        }
+
+        _hangUp('ended');
+        return;
       }
 
-      _hangUp('ended');
-      return;
-    }
+      if (_closing || !mounted) return;
 
-    if (_closing || !mounted) return;
-
-    try {
+      final credentials = await RtcService.credentials(widget.callId);
+      if (_closing || !mounted) return;
       final engine = createAgoraRtcEngine();
       _engine = engine;
 
       await engine.initialize(
-        const RtcEngineContext(
-          appId: agoraAppId,
-          channelProfile:
-          ChannelProfileType.channelProfileCommunication,
+        RtcEngineContext(
+          appId: credentials.appId,
+          channelProfile: ChannelProfileType.channelProfileCommunication,
         ),
       );
 
       engine.registerEventHandler(
         RtcEngineEventHandler(
+          onTokenPrivilegeWillExpire: (connection, token) => _renewToken(),
+          onRequestToken: (connection) => _renewToken(),
           onJoinChannelSuccess: (connection, elapsed) {
             if (mounted) {
               setState(() {
@@ -168,32 +163,29 @@ class _CallScreenState extends State<CallScreen> {
             _hangUp('ended');
           },
 
-          onRemoteVideoStateChanged: (
-              connection,
-              remoteUid,
-              state,
-              reason,
-              elapsed,
-              ) {
-            if (!mounted) return;
+          onRemoteVideoStateChanged:
+              (connection, remoteUid, state, reason, elapsed) {
+                if (!mounted) return;
 
-            setState(() {
-              _remoteVideoOff =
-                  state ==
-                      RemoteVideoState
-                          .remoteVideoStateStopped ||
+                setState(() {
+                  _remoteVideoOff =
+                      state == RemoteVideoState.remoteVideoStateStopped ||
                       reason ==
                           RemoteVideoStateReason
                               .remoteVideoStateReasonRemoteMuted;
-            });
-          },
+                });
+              },
 
           onError: (err, msg) {
             debugPrint('Agora error: $err $msg');
             if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-                content: Text('Agora lỗi $err: $msg. Kiểm tra App ID và chế độ xác thực token trên Agora Console.'),
-              ));
+              ScaffoldMessenger.of(context).showSnackBar(
+                SnackBar(
+                  content: Text(
+                    'Agora lỗi $err: $msg. Kiểm tra App ID và chế độ xác thực token trên Agora Console.',
+                  ),
+                ),
+              );
             }
           },
         ),
@@ -206,21 +198,17 @@ class _CallScreenState extends State<CallScreen> {
         await engine.disableVideo();
       }
 
-      await engine.setDefaultAudioRouteToSpeakerphone(
-        _speakerOn,
-      );
+      await engine.setDefaultAudioRouteToSpeakerphone(_speakerOn);
 
       if (_closing || !mounted) return;
 
       await engine.joinChannel(
-        token: '',
+        token: credentials.token,
         channelId: widget.callId,
-        uid: 0,
+        uid: credentials.uid,
         options: ChannelMediaOptions(
-          clientRoleType:
-          ClientRoleType.clientRoleBroadcaster,
-          channelProfile:
-          ChannelProfileType.channelProfileCommunication,
+          clientRoleType: ClientRoleType.clientRoleBroadcaster,
+          channelProfile: ChannelProfileType.channelProfileCommunication,
           publishMicrophoneTrack: true,
           publishCameraTrack: widget.isVideo,
           autoSubscribeAudio: true,
@@ -229,6 +217,11 @@ class _CallScreenState extends State<CallScreen> {
       );
     } catch (e) {
       debugPrint('Lỗi khởi tạo Agora: $e');
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Không khởi tạo được cuộc gọi: $e')),
+        );
+      }
       _hangUp('ended');
     }
   }
@@ -239,22 +232,30 @@ class _CallScreenState extends State<CallScreen> {
     _everConnected = true;
     _timeoutTimer?.cancel();
 
-    _durationTimer = Timer.periodic(
-      const Duration(seconds: 1),
-          (_) {
-        if (mounted) {
-          setState(() {
-            _seconds++;
-          });
-        }
-      },
-    );
+    _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+      if (mounted) {
+        setState(() {
+          _seconds++;
+        });
+      }
+    });
   }
 
-  Future<void> _hangUp(
-      String reason, {
-        bool updateRemote = true,
-      }) async {
+  Future<void> _renewToken() async {
+    if (_closing || !mounted) return;
+    try {
+      final credentials = await RtcService.credentials(widget.callId);
+      if (_closing || !mounted) return;
+      await _engine?.renewToken(credentials.token);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$e')));
+      }
+    }
+  }
+
+  Future<void> _hangUp(String reason, {bool updateRemote = true}) async {
     if (_closing) return;
 
     _closing = true;
@@ -285,6 +286,19 @@ class _CallScreenState extends State<CallScreen> {
       });
     }
 
+    unawaited(() async {
+      try {
+        await engine?.leaveChannel();
+      } catch (e) {
+        debugPrint('Leave Agora: $e');
+      } finally {
+        try {
+          await engine?.release();
+        } catch (e) {
+          debugPrint('Release Agora: $e');
+        }
+      }
+    }());
     // Don dep chay nen sau khi da len lich pop, loi mang / Agora
     // chi in log, khong giu man hinh lai.
     try {
@@ -301,14 +315,6 @@ class _CallScreenState extends State<CallScreen> {
       }
     } catch (e) {
       debugPrint('Lỗi khi kết thúc cuộc gọi: $e');
-    }
-    if (engine != null) {
-      try {
-        await engine.leaveChannel();
-        await engine.release();
-      } catch (e) {
-        debugPrint('Lỗi giải phóng Agora: $e');
-      }
     }
   }
 
@@ -379,18 +385,14 @@ class _CallScreenState extends State<CallScreen> {
 
   String get _statusText {
     if (_everConnected) {
-      final minutes =
-      (_seconds ~/ 60).toString().padLeft(2, '0');
+      final minutes = (_seconds ~/ 60).toString().padLeft(2, '0');
 
-      final seconds =
-      (_seconds % 60).toString().padLeft(2, '0');
+      final seconds = (_seconds % 60).toString().padLeft(2, '0');
 
       return '$minutes:$seconds';
     }
 
-    return widget.isCaller
-        ? 'Đang gọi...'
-        : 'Đang kết nối...';
+    return widget.isCaller ? 'Đang gọi...' : 'Đang kết nối...';
   }
 
   @override
@@ -404,9 +406,7 @@ class _CallScreenState extends State<CallScreen> {
       },
       child: Scaffold(
         backgroundColor: Colors.black,
-        body: widget.isVideo
-            ? _videoLayout()
-            : _audioLayout(),
+        body: widget.isVideo ? _videoLayout() : _audioLayout(),
       ),
     );
   }
@@ -425,9 +425,7 @@ class _CallScreenState extends State<CallScreen> {
       controller: VideoViewController.remote(
         rtcEngine: _engine!,
         canvas: VideoCanvas(uid: _remoteUid),
-        connection: RtcConnection(
-          channelId: widget.callId,
-        ),
+        connection: RtcConnection(channelId: widget.callId),
       ),
     );
   }
@@ -438,6 +436,7 @@ class _CallScreenState extends State<CallScreen> {
       alignment: Alignment.center,
       child: Avatar(
         name: widget.peer.name,
+        imageUrl: widget.peer.avatarUrl,
         radius: 56,
       ),
     );
@@ -453,35 +452,27 @@ class _CallScreenState extends State<CallScreen> {
           child: !ready
               ? _peerPlaceholder()
               : connected
-              ? (_remoteVideoOff
-              ? _peerPlaceholder()
-              : _remoteView())
-              : (_camOn
-              ? _localView()
-              : _peerPlaceholder()),
+              ? (_remoteVideoOff ? _peerPlaceholder() : _remoteView())
+              : (_camOn ? _localView() : _peerPlaceholder()),
         ),
 
         if (ready && connected && _camOn)
           Positioned(
-            top:
-            MediaQuery.of(context).padding.top + 16,
+            top: MediaQuery.of(context).padding.top + 16,
             right: 16,
             width: 110,
             height: 160,
             child: ClipRRect(
-              borderRadius:
-              BorderRadius.circular(20),
+              borderRadius: BorderRadius.circular(20),
               child: _localView(),
             ),
           ),
 
         Positioned(
-          top:
-          MediaQuery.of(context).padding.top + 16,
+          top: MediaQuery.of(context).padding.top + 16,
           left: 16,
           child: Column(
-            crossAxisAlignment:
-            CrossAxisAlignment.start,
+            crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               Text(
                 widget.peer.name,
@@ -489,30 +480,21 @@ class _CallScreenState extends State<CallScreen> {
                   color: Colors.white,
                   fontSize: 22,
                   fontWeight: FontWeight.bold,
-                  shadows: [
-                    Shadow(blurRadius: 6),
-                  ],
+                  shadows: [Shadow(blurRadius: 6)],
                 ),
               ),
               Text(
                 _statusText,
                 style: const TextStyle(
                   color: Colors.white,
-                  shadows: [
-                    Shadow(blurRadius: 6),
-                  ],
+                  shadows: [Shadow(blurRadius: 6)],
                 ),
               ),
             ],
           ),
         ),
 
-        Positioned(
-          left: 0,
-          right: 0,
-          bottom: 40,
-          child: _controls(),
-        ),
+        Positioned(left: 0, right: 0, bottom: 40, child: _controls()),
       ],
     );
   }
@@ -524,10 +506,7 @@ class _CallScreenState extends State<CallScreen> {
         gradient: LinearGradient(
           begin: Alignment.topCenter,
           end: Alignment.bottomCenter,
-          colors: [
-            Color(0xFF1C1E21),
-            Color(0xFF0B3D91),
-          ],
+          colors: [Color(0xFF1C1E21), Color(0xFF0B3D91)],
         ),
       ),
       child: SafeArea(
@@ -537,6 +516,7 @@ class _CallScreenState extends State<CallScreen> {
 
             Avatar(
               name: widget.peer.name,
+              imageUrl: widget.peer.avatarUrl,
               radius: 60,
             ),
 
@@ -555,17 +535,13 @@ class _CallScreenState extends State<CallScreen> {
 
             Text(
               _statusText,
-              style: const TextStyle(
-                color: Colors.white70,
-                fontSize: 16,
-              ),
+              style: const TextStyle(color: Colors.white70, fontSize: 16),
             ),
 
             const Spacer(),
 
             Padding(
-              padding:
-              const EdgeInsets.only(bottom: 40),
+              padding: const EdgeInsets.only(bottom: 40),
               child: _controls(),
             ),
           ],
@@ -576,26 +552,18 @@ class _CallScreenState extends State<CallScreen> {
 
   Widget _controls() {
     return Row(
-      mainAxisAlignment:
-      MainAxisAlignment.spaceEvenly,
+      mainAxisAlignment: MainAxisAlignment.spaceEvenly,
       children: [
         if (widget.isVideo) ...[
+          _roundButton(Icons.cameraswitch, _switchCamera),
           _roundButton(
-            Icons.cameraswitch,
-            _switchCamera,
-          ),
-          _roundButton(
-            _camOn
-                ? Icons.videocam
-                : Icons.videocam_off,
+            _camOn ? Icons.videocam : Icons.videocam_off,
             _toggleCam,
             active: !_camOn,
           ),
         ] else
           _roundButton(
-            _speakerOn
-                ? Icons.volume_up
-                : Icons.volume_down,
+            _speakerOn ? Icons.volume_up : Icons.volume_down,
             _toggleSpeaker,
             active: _speakerOn,
           ),
@@ -608,7 +576,7 @@ class _CallScreenState extends State<CallScreen> {
 
         _roundButton(
           Icons.call_end,
-              () => _hangUp('ended'),
+          () => _hangUp('ended'),
           color: Colors.red,
           size: 34,
         ),
@@ -617,29 +585,23 @@ class _CallScreenState extends State<CallScreen> {
   }
 
   Widget _roundButton(
-      IconData icon,
-      VoidCallback onTap, {
-        bool active = false,
-        Color? color,
-        double size = 28,
-      }) {
+    IconData icon,
+    VoidCallback onTap, {
+    bool active = false,
+    Color? color,
+    double size = 28,
+  }) {
     return GestureDetector(
       behavior: HitTestBehavior.opaque,
       onTap: onTap,
       child: CircleAvatar(
         radius: size,
-        backgroundColor:
-        color ??
-            (active
-                ? Colors.white
-                : Colors.white24),
+        backgroundColor: color ?? (active ? Colors.white : Colors.white24),
         child: Icon(
           icon,
           color: color != null
               ? Colors.white
-              : (active
-              ? Colors.black
-              : Colors.white),
+              : (active ? Colors.black : Colors.white),
           size: size * 0.9,
         ),
       ),

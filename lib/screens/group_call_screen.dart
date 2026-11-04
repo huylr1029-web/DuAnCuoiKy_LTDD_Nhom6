@@ -4,7 +4,7 @@ import 'package:agora_rtc_engine/agora_rtc_engine.dart';
 import 'package:flutter/material.dart';
 import 'package:permission_handler/permission_handler.dart';
 
-import '../config.dart';
+import '../services/rtc_service.dart';
 import '../models/api_models.dart';
 import '../services/call_service.dart';
 import '../services/group_call_service.dart';
@@ -23,7 +23,11 @@ import '../widgets/avatar.dart';
 class GroupCallScreen extends StatefulWidget {
   final GroupCallItem call;
   final bool isCreator;
-  const GroupCallScreen({super.key, required this.call, required this.isCreator});
+  const GroupCallScreen({
+    super.key,
+    required this.call,
+    required this.isCreator,
+  });
 
   @override
   State<GroupCallScreen> createState() => _GroupCallScreenState();
@@ -55,7 +59,10 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
     _durationTimer = Timer.periodic(const Duration(seconds: 1), (_) {
       if (mounted) setState(() => _seconds++);
     });
-    _statusTimer = Timer.periodic(const Duration(seconds: 2), (_) => _checkStatus());
+    _statusTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => _checkStatus(),
+    );
     _startAgora();
   }
 
@@ -63,6 +70,10 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
   void dispose() {
     _durationTimer?.cancel();
     _statusTimer?.cancel();
+    if (!_closing) {
+      CallService.inCall = false;
+      unawaited(_releaseEngine());
+    }
     super.dispose();
   }
 
@@ -77,60 +88,125 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
   }
 
   Future<void> _startAgora() async {
-    final perms = await [
-      Permission.microphone,
-      if (widget.call.isVideo) Permission.camera,
-    ].request();
-    if (perms.values.any((s) => !s.isGranted)) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cần cấp quyền micro/camera để gọi nhóm')));
-      }
-      _hangUp();
-      return;
-    }
-    if (_closing || !mounted) return;
     try {
+      final perms = await [
+        Permission.microphone,
+        if (widget.call.isVideo) Permission.camera,
+      ].request();
+      if (perms.values.any((s) => !s.isGranted)) {
+        if (mounted) {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Cần cấp quyền micro/camera để gọi nhóm'),
+            ),
+          );
+        }
+        _hangUp();
+        return;
+      }
+      if (_closing || !mounted) return;
+      final credentials = await RtcService.credentials(
+        widget.call.id,
+        isGroup: true,
+      );
+      if (_closing || !mounted) return;
       final engine = createAgoraRtcEngine();
       _engine = engine;
-      await engine.initialize(const RtcEngineContext(
-          appId: agoraAppId, channelProfile: ChannelProfileType.channelProfileCommunication));
-      engine.registerEventHandler(RtcEngineEventHandler(
-        onJoinChannelSuccess: (connection, elapsed) {
-          if (mounted) setState(() => _joined = true);
-        },
-        onUserJoined: (connection, remoteUid, elapsed) {
-          if (mounted) setState(() => _remoteUids.add(remoteUid));
-        },
-        onUserOffline: (connection, remoteUid, reason) {
-          if (mounted) setState(() => _remoteUids.remove(remoteUid));
-        },
-      ));
+      await engine.initialize(
+        RtcEngineContext(
+          appId: credentials.appId,
+          channelProfile: ChannelProfileType.channelProfileCommunication,
+        ),
+      );
+      engine.registerEventHandler(
+        RtcEngineEventHandler(
+          onTokenPrivilegeWillExpire: (connection, token) => _renewToken(),
+          onRequestToken: (connection) => _renewToken(),
+          onJoinChannelSuccess: (connection, elapsed) {
+            if (mounted) setState(() => _joined = true);
+          },
+          onUserJoined: (connection, remoteUid, elapsed) {
+            if (mounted) setState(() => _remoteUids.add(remoteUid));
+          },
+          onUserOffline: (connection, remoteUid, reason) {
+            if (mounted) setState(() => _remoteUids.remove(remoteUid));
+          },
+        ),
+      );
       await engine.setClientRole(role: ClientRoleType.clientRoleBroadcaster);
-      await engine.enableVideo();
-      await engine.startPreview();
+      if (widget.call.isVideo) {
+        await engine.enableVideo();
+        await engine.startPreview();
+      } else {
+        await engine.disableVideo();
+      }
+      await engine.setDefaultAudioRouteToSpeakerphone(_speakerOn);
+      if (_closing || !mounted) return;
       await engine.joinChannel(
-          token: '', channelId: widget.call.id, uid: 0,
-          options: const ChannelMediaOptions(
-              autoSubscribeVideo: true, autoSubscribeAudio: true, publishCameraTrack: true, publishMicrophoneTrack: true));
+        token: credentials.token,
+        channelId: widget.call.id,
+        uid: credentials.uid,
+        options: ChannelMediaOptions(
+          autoSubscribeVideo: widget.call.isVideo,
+          autoSubscribeAudio: true,
+          publishCameraTrack: widget.call.isVideo,
+          publishMicrophoneTrack: true,
+        ),
+      );
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không vào được cuộc gọi nhóm: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Không vào được cuộc gọi nhóm: $e')),
+        );
       }
-      _hangUp(updateRemote: false);
+      _hangUp();
+    }
+  }
+
+  Future<void> _renewToken() async {
+    if (_closing || !mounted) return;
+    try {
+      final credentials = await RtcService.credentials(
+        widget.call.id,
+        isGroup: true,
+      );
+      if (_closing || !mounted) return;
+      await _engine?.renewToken(credentials.token);
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$e')));
+      }
     }
   }
 
   Future<void> _hangUp({bool updateRemote = true}) async {
     if (_closing) return;
     _closing = true;
+    _durationTimer?.cancel();
+    _statusTimer?.cancel();
     CallService.inCall = false;
     final engine = _engine;
+    _engine = null;
     final isCreator = widget.isCreator;
     final id = widget.call.id;
     if (mounted) setState(() => _canPop = true);
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (mounted) Navigator.pop(context);
     });
+    unawaited(() async {
+      try {
+        await engine?.leaveChannel();
+      } catch (e) {
+        debugPrint('Leave Agora: $e');
+      } finally {
+        try {
+          await engine?.release();
+        } catch (e) {
+          debugPrint('Release Agora: $e');
+        }
+      }
+    }());
     // Don dep sau khi pop da duoc len lich, de nut luon phan hoi ngay.
     try {
       if (updateRemote) {
@@ -141,10 +217,16 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
         }
       }
     } catch (_) {}
+  }
+
+  Future<void> _releaseEngine() async {
+    final engine = _engine;
+    _engine = null;
     try {
       await engine?.leaveChannel();
+    } finally {
       await engine?.release();
-    } catch (_) {}
+    }
   }
 
   String _fmt(int s) {
@@ -154,25 +236,31 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
   }
 
   Widget _videoCell({int? remoteUid, bool isLocal = false}) {
-    if (!widget.call.isVideo) {
+    if (!widget.call.isVideo ||
+        _engine == null ||
+        !_joined ||
+        (isLocal && !_camOn)) {
       return Container(
         color: Colors.grey.shade800,
         child: Center(
-          child: Avatar(
-              name: isLocal ? 'Bạn' : 'Người tham gia',
-              radius: 32),
+          child: Avatar(name: isLocal ? 'Bạn' : 'Người tham gia', radius: 32),
         ),
       );
     }
     if (isLocal) {
       return AgoraVideoView(
         controller: VideoViewController(
-            rtcEngine: _engine!, canvas: const VideoCanvas(uid: 0)),
+          rtcEngine: _engine!,
+          canvas: const VideoCanvas(uid: 0),
+        ),
       );
     }
     return AgoraVideoView(
-      controller: VideoViewController(
-          rtcEngine: _engine!, canvas: VideoCanvas(uid: remoteUid ?? 0)),
+      controller: VideoViewController.remote(
+        rtcEngine: _engine!,
+        canvas: VideoCanvas(uid: remoteUid),
+        connection: RtcConnection(channelId: widget.call.id),
+      ),
     );
   }
 
@@ -182,7 +270,9 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
     for (final uid in _remoteUids) {
       cells.add(_videoCell(remoteUid: uid));
     }
-    final accepted = _participants.where((p) => p.status == 'accepted').toList();
+    final accepted = _participants
+        .where((p) => p.status == 'accepted')
+        .toList();
     return PopScope(
       canPop: _canPop,
       onPopInvokedWithResult: (didPop, result) {
@@ -191,81 +281,111 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
       child: Scaffold(
         backgroundColor: Colors.black,
         body: SafeArea(
-          child: Column(children: [
-            Padding(
-              padding: const EdgeInsets.all(16),
-              child: Column(children: [
-                Text(_title, style: const TextStyle(color: Colors.white, fontSize: 20, fontWeight: FontWeight.bold), textAlign: TextAlign.center),
-                const SizedBox(height: 4),
-                Text(
-                  _joined
-                      ? '${accepted.length} người đang trong cuộc gọi · ${_fmt(_seconds)}'
-                      : 'Đang kết nối...',
-                  style: const TextStyle(color: Colors.white70),
-                  textAlign: TextAlign.center,
+          child: Column(
+            children: [
+              Padding(
+                padding: const EdgeInsets.all(16),
+                child: Column(
+                  children: [
+                    Text(
+                      _title,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 20,
+                        fontWeight: FontWeight.bold,
+                      ),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      _joined
+                          ? '${accepted.length} người đang trong cuộc gọi · ${_fmt(_seconds)}'
+                          : 'Đang kết nối...',
+                      style: const TextStyle(color: Colors.white70),
+                      textAlign: TextAlign.center,
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      accepted.map((p) => p.userName).join(', '),
+                      style: const TextStyle(
+                        color: Colors.white54,
+                        fontSize: 12,
+                      ),
+                      textAlign: TextAlign.center,
+                      maxLines: 2,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                  ],
                 ),
-                const SizedBox(height: 4),
-                Text(
-                  accepted.map((p) => p.userName).join(', '),
-                  style: const TextStyle(color: Colors.white54, fontSize: 12),
-                  textAlign: TextAlign.center,
-                  maxLines: 2,
-                  overflow: TextOverflow.ellipsis,
+              ),
+              Expanded(
+                child: _joined
+                    ? GridView.count(
+                        crossAxisCount: cells.length <= 2 ? 1 : 2,
+                        mainAxisSpacing: 12,
+                        crossAxisSpacing: 12,
+                        padding: const EdgeInsets.all(12),
+                        children: cells,
+                      )
+                    : const Center(
+                        child: CircularProgressIndicator(color: Colors.white),
+                      ),
+              ),
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 24),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    _roundButton(
+                      icon: _micOn ? Icons.mic : Icons.mic_off,
+                      onTap: () async {
+                        await _engine?.muteLocalAudioStream(_micOn);
+                        if (!mounted || _closing) return;
+                        setState(() => _micOn = !_micOn);
+                      },
+                    ),
+                    const SizedBox(width: 16),
+                    if (widget.call.isVideo)
+                      _roundButton(
+                        icon: _camOn ? Icons.videocam : Icons.videocam_off,
+                        onTap: () async {
+                          await _engine?.muteLocalVideoStream(_camOn);
+                          if (!mounted || _closing) return;
+                          setState(() => _camOn = !_camOn);
+                        },
+                      ),
+                    if (widget.call.isVideo) const SizedBox(width: 16),
+                    _roundButton(
+                      icon: _speakerOn ? Icons.volume_up : Icons.volume_off,
+                      onTap: () async {
+                        await _engine?.setEnableSpeakerphone(!_speakerOn);
+                        if (!mounted || _closing) return;
+                        setState(() => _speakerOn = !_speakerOn);
+                      },
+                    ),
+                    const SizedBox(width: 16),
+                    GestureDetector(
+                      behavior: HitTestBehavior.opaque,
+                      onTap: () => _hangUp(),
+                      child: Container(
+                        width: 64,
+                        height: 64,
+                        decoration: const BoxDecoration(
+                          color: Colors.red,
+                          shape: BoxShape.circle,
+                        ),
+                        child: const Icon(
+                          Icons.call_end,
+                          color: Colors.white,
+                          size: 30,
+                        ),
+                      ),
+                    ),
+                  ],
                 ),
-              ]),
-            ),
-            Expanded(
-              child: _joined
-                  ? GridView.count(
-                      crossAxisCount: cells.length <= 2 ? 1 : 2,
-                      mainAxisSpacing: 12,
-                      crossAxisSpacing: 12,
-                      padding: const EdgeInsets.all(12),
-                      children: cells,
-                    )
-                  : const Center(child: CircularProgressIndicator(color: Colors.white)),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 24),
-              child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-                _roundButton(
-                  icon: _micOn ? Icons.mic : Icons.mic_off,
-                  onTap: () async {
-                    await _engine?.muteLocalAudioStream(!_micOn);
-                    setState(() => _micOn = !_micOn);
-                  },
-                ),
-                const SizedBox(width: 16),
-                if (widget.call.isVideo)
-                  _roundButton(
-                    icon: _camOn ? Icons.videocam : Icons.videocam_off,
-                    onTap: () async {
-                      await _engine?.muteLocalVideoStream(!_camOn);
-                      setState(() => _camOn = !_camOn);
-                    },
-                  ),
-                if (widget.call.isVideo) const SizedBox(width: 16),
-                _roundButton(
-                  icon: _speakerOn ? Icons.volume_up : Icons.volume_off,
-                  onTap: () async {
-                    await _engine?.setEnableSpeakerphone(!_speakerOn);
-                    setState(() => _speakerOn = !_speakerOn);
-                  },
-                ),
-                const SizedBox(width: 16),
-                GestureDetector(
-                  behavior: HitTestBehavior.opaque,
-                  onTap: () => _hangUp(),
-                  child: Container(
-                    width: 64,
-                    height: 64,
-                    decoration: const BoxDecoration(color: Colors.red, shape: BoxShape.circle),
-                    child: const Icon(Icons.call_end, color: Colors.white, size: 30),
-                  ),
-                ),
-              ]),
-            ),
-          ]),
+              ),
+            ],
+          ),
         ),
       ),
     );
@@ -278,7 +398,10 @@ class _GroupCallScreenState extends State<GroupCallScreen> {
       child: Container(
         width: 56,
         height: 56,
-        decoration: BoxDecoration(color: Colors.white24, shape: BoxShape.circle),
+        decoration: BoxDecoration(
+          color: Colors.white24,
+          shape: BoxShape.circle,
+        ),
         child: Icon(icon, color: Colors.white),
       ),
     );

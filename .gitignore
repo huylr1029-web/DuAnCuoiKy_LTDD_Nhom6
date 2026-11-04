@@ -46,3 +46,23 @@ app.*.map.json
 
 # Widget Preview related
 .widget_preview/
+
+# ASP.NET backend and integration tests
+**/bin/
+**/obj/
+**/TestResults/
+**/*.db
+**/*.db-shm
+**/*.db-wal
+
+# Local credentials and saved metadata from the previous nested backend checkout
+**/appsettings.Development.json
+**/appsettings.Production.json
+**/.env
+**/.env.*
+**/secrets.json
+**/*.pfx
+**/*.p12
+**/*.pem
+**/*.key
+/.repo-metadata/

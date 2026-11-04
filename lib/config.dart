@@ -1,19 +1,18 @@
-
 import 'package:flutter/material.dart';
 
-// Agora App ID - dung cho goi thoai va video.
-const String agoraAppId = '34137982120541198b76d394ec92c501';
+// Agora App ID and short-lived tokens are supplied by the authenticated backend.
 
 // Mau xanh Messenger.
 const Color messengerBlue = Color(0xFF0084FF);
 
 // Navigator toan cuc cho cuoc goi den.
-final GlobalKey<NavigatorState> navigatorKey =
-GlobalKey<NavigatorState>();
+final GlobalKey<NavigatorState> navigatorKey = GlobalKey<NavigatorState>();
 
 // Dia chi API ASP.NET Core tren Render.
-String get apiBaseUrl =>
-    'https://duancuoiky-ltdd-api.onrender.com';
+String get apiBaseUrl => const String.fromEnvironment(
+  'API_BASE_URL',
+  defaultValue: 'https://duancuoiky-ltdd-api.onrender.com',
+).trim().replaceAll(RegExp(r'/+$'), '');
 
 // Web OAuth Client ID dung cho Google Sign-In.
 const String googleServerClientId =

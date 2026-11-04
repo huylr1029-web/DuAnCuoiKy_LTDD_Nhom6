@@ -30,7 +30,10 @@ class _LoginScreenState extends State<LoginScreen> {
   }
 
   Future<void> _submit() async {
-    if (_email.text.isEmpty || _password.text.isEmpty || (_isRegister && (_name.text.isEmpty || _phone.text.isEmpty))) {
+    if (_loading) return;
+    if (_email.text.isEmpty ||
+        _password.text.isEmpty ||
+        (_isRegister && (_name.text.isEmpty || _phone.text.isEmpty))) {
       _snack('Vui lòng nhập đầy đủ thông tin');
       return;
     }
@@ -45,7 +48,17 @@ class _LoginScreenState extends State<LoginScreen> {
     setState(() => _loading = true);
     try {
       if (_isRegister) {
-        await AuthService().register(_name.text, _email.text, _password.text, _phone.text);
+        if (_password.text.length < 6 ||
+            !RegExp(r'^[^\s@]+@[^\s@]+\.[^\s@]+$')
+                .hasMatch(_email.text.trim())) {
+          _snack('Email không hợp lệ hoặc mật khẩu ít hơn 6 ký tự.');
+          return;
+        }
+        final name = _name.text;
+        final email = _email.text;
+        final password = _password.text;
+        final phone = AuthService.normalizePhone(_phone.text)!;
+        await AuthService().register(name, email, password, phone);
       } else {
         await AuthService().login(_email.text, _password.text);
       }
@@ -77,17 +90,19 @@ class _LoginScreenState extends State<LoginScreen> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            const Text('Nhập email đã đăng ký để nhận liên kết đặt lại mật khẩu.'),
+            const Text(
+              'Nhập email đã đăng ký để nhận liên kết đặt lại mật khẩu.',
+            ),
             const SizedBox(height: 16),
             TextFormField(
               initialValue: typedEmail,
               onChanged: (value) => typedEmail = value,
               keyboardType: TextInputType.emailAddress,
               autofocus: true,
-              decoration: _deco('Email của bạn', Icons.email_outlined).copyWith(
-                hintText: null,
-                labelText: 'Email',
-              ),
+              decoration: _deco(
+                'Email của bạn',
+                Icons.email_outlined,
+              ).copyWith(hintText: null, labelText: 'Email'),
             ),
           ],
         ),
@@ -112,7 +127,9 @@ class _LoginScreenState extends State<LoginScreen> {
     try {
       await AuthService().sendPasswordResetEmail(email);
       if (mounted) {
-        _snack('Nếu email đã đăng ký, bạn sẽ nhận được liên kết đặt lại mật khẩu. Hãy kiểm tra cả thư mục Spam.');
+        _snack(
+          'Nếu email đã đăng ký, bạn sẽ nhận được liên kết đặt lại mật khẩu. Hãy kiểm tra cả thư mục Spam.',
+        );
       }
     } catch (e) {
       if (mounted) _snack(AuthService.message(e));
@@ -130,7 +147,9 @@ class _LoginScreenState extends State<LoginScreen> {
     filled: true,
     fillColor: AppColors.inputFill,
     border: OutlineInputBorder(
-        borderRadius: BorderRadius.circular(16), borderSide: BorderSide.none),
+      borderRadius: BorderRadius.circular(16),
+      borderSide: BorderSide.none,
+    ),
   );
 
   @override
@@ -145,37 +164,56 @@ class _LoginScreenState extends State<LoginScreen> {
               children: [
                 const GradientIcon(icon: Icons.forum_rounded, size: 84),
                 const SizedBox(height: 16),
-                Text(_isRegister ? 'Tạo tài khoản' : 'Đăng nhập',
-                    style: const TextStyle(fontSize: 26, fontWeight: FontWeight.bold)),
+                Text(
+                  _isRegister ? 'Tạo tài khoản' : 'Đăng nhập',
+                  style: const TextStyle(
+                    fontSize: 26,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
                 const SizedBox(height: 6),
-                const Text('Nhắn tin, gọi video và chia sẻ Reels cùng bạn bè',
-                    textAlign: TextAlign.center, style: TextStyle(color: AppColors.muted)),
+                const Text(
+                  'Nhắn tin, gọi video và chia sẻ Reels cùng bạn bè',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(color: AppColors.muted),
+                ),
                 const SizedBox(height: 28),
                 if (_isRegister) ...[
-                  TextField(controller: _name, decoration: _deco('Họ và tên', Icons.person)),
+                  TextField(
+                    controller: _name,
+                    decoration: _deco('Họ và tên', Icons.person),
+                  ),
                   const SizedBox(height: 12),
                   TextField(
                     controller: _phone,
                     keyboardType: TextInputType.phone,
-                    decoration: _deco('Số điện thoại (ví dụ 0912345678)', Icons.phone),
+                    decoration: _deco(
+                      'Số điện thoại (ví dụ 0912345678)',
+                      Icons.phone,
+                    ),
                   ),
                   const SizedBox(height: 12),
                 ],
                 TextField(
-                    controller: _email,
-                    keyboardType: TextInputType.emailAddress,
-                    decoration: _deco('Email', Icons.email)),
+                  controller: _email,
+                  keyboardType: TextInputType.emailAddress,
+                  decoration: _deco('Email', Icons.email),
+                ),
                 const SizedBox(height: 12),
                 TextField(
-                    controller: _password,
-                    obscureText: true,
-                    decoration: _deco('Mật khẩu', Icons.lock)),
+                  controller: _password,
+                  obscureText: true,
+                  decoration: _deco('Mật khẩu', Icons.lock),
+                ),
                 if (_isRegister) ...[
                   const SizedBox(height: 12),
                   TextField(
                     controller: _confirmPassword,
                     obscureText: true,
-                    decoration: _deco('Xác nhận mật khẩu', Icons.verified_user_outlined),
+                    decoration: _deco(
+                      'Xác nhận mật khẩu',
+                      Icons.verified_user_outlined,
+                    ),
                   ),
                 ] else ...[
                   Align(
@@ -192,24 +230,42 @@ class _LoginScreenState extends State<LoginScreen> {
                   height: 54,
                   child: FilledButton(
                     style: FilledButton.styleFrom(
-                        backgroundColor: AppColors.primary,
-                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16))),
+                      backgroundColor: AppColors.primary,
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                    ),
                     onPressed: _loading ? null : _submit,
                     child: _loading
                         ? const SizedBox(
-                        width: 22, height: 22,
-                        child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                        : Text(_isRegister ? 'Đăng ký' : 'Đăng nhập',
-                        style: const TextStyle(fontSize: 16)),
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              color: Colors.white,
+                            ),
+                          )
+                        : Text(
+                            _isRegister ? 'Đăng ký' : 'Đăng nhập',
+                            style: const TextStyle(fontSize: 16),
+                          ),
                   ),
                 ),
                 if (!_isRegister) ...[
                   const SizedBox(height: 16),
-                  const Row(children: [
-                    Expanded(child: Divider()),
-                    Padding(padding: EdgeInsets.symmetric(horizontal: 12), child: Text('hoặc', style: TextStyle(color: AppColors.muted))),
-                    Expanded(child: Divider()),
-                  ]),
+                  const Row(
+                    children: [
+                      Expanded(child: Divider()),
+                      Padding(
+                        padding: EdgeInsets.symmetric(horizontal: 12),
+                        child: Text(
+                          'hoặc',
+                          style: TextStyle(color: AppColors.muted),
+                        ),
+                      ),
+                      Expanded(child: Divider()),
+                    ],
+                  ),
                   const SizedBox(height: 16),
                   SizedBox(
                     width: double.infinity,
@@ -222,10 +278,14 @@ class _LoginScreenState extends State<LoginScreen> {
                   ),
                 ],
                 TextButton(
-                  onPressed: _loading ? null : () => setState(() => _isRegister = !_isRegister),
-                  child: Text(_isRegister
-                      ? 'Đã có tài khoản? Đăng nhập'
-                      : 'Chưa có tài khoản? Đăng ký'),
+                  onPressed: _loading
+                      ? null
+                      : () => setState(() => _isRegister = !_isRegister),
+                  child: Text(
+                    _isRegister
+                        ? 'Đã có tài khoản? Đăng nhập'
+                        : 'Chưa có tài khoản? Đăng ký',
+                  ),
                 ),
               ],
             ),

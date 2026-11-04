@@ -13,7 +13,11 @@ import 'call_screen.dart';
 class IncomingCallScreen extends StatefulWidget {
   final String callId;
   final CallItem call;
-  const IncomingCallScreen({super.key, required this.callId, required this.call});
+  const IncomingCallScreen({
+    super.key,
+    required this.callId,
+    required this.call,
+  });
 
   @override
   State<IncomingCallScreen> createState() => _IncomingCallScreenState();
@@ -71,33 +75,50 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
   }
 
   Future<void> _accept() async {
-    _handled = true;
-    _pollTimer?.cancel();
-    _pollTimer = null;
-    await _sub?.cancel();
-    await CallService().updateStatus(widget.callId, 'accepted');
-    if (!mounted) return;
-    setState(() => _canPop = true);
-    Navigator.pushReplacement(
-      context,
-      MaterialPageRoute(
-        builder: (_) => CallScreen(
-          callId: widget.callId,
-          peer: AppUser(uid: widget.call.callerId, name: _callerName),
-          isVideo: _isVideo,
-          isCaller: false,
+    if (_handled) return;
+    setState(() => _handled = true);
+    try {
+      await CallService().updateStatus(widget.callId, 'accepted');
+      if (!mounted) return;
+      _pollTimer?.cancel();
+      await _sub?.cancel();
+      if (!mounted) return;
+      setState(() => _canPop = true);
+      Navigator.pushReplacement(
+        context,
+        MaterialPageRoute(
+          builder: (_) => CallScreen(
+            callId: widget.callId,
+            peer: AppUser(uid: widget.call.callerId, name: _callerName),
+            isVideo: _isVideo,
+            isCaller: false,
+          ),
         ),
-      ),
-    );
+      );
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _handled = false);
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('Không nhận được cuộc gọi: $e')));
+    }
   }
 
   Future<void> _decline() async {
-    _handled = true;
-    _pollTimer?.cancel();
-    _pollTimer = null;
-    await _sub?.cancel();
-    await CallService().updateStatus(widget.callId, 'rejected');
-    _popAfterRebuild();
+    if (_handled) return;
+    setState(() => _handled = true);
+    try {
+      await CallService().updateStatus(widget.callId, 'rejected');
+      _pollTimer?.cancel();
+      await _sub?.cancel();
+      _popAfterRebuild();
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _handled = false);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Không từ chối được cuộc gọi: $e')),
+      );
+    }
   }
 
   @override
@@ -120,12 +141,19 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
                 const SizedBox(height: 80),
                 Avatar(name: _callerName, radius: 56),
                 const SizedBox(height: 20),
-                Text(_callerName,
-                    style: const TextStyle(
-                        color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold)),
+                Text(
+                  _callerName,
+                  style: const TextStyle(
+                    color: Colors.white,
+                    fontSize: 28,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
                 const SizedBox(height: 8),
-                Text(_isVideo ? 'Cuộc gọi video đến...' : 'Cuộc gọi thoại đến...',
-                    style: const TextStyle(color: Colors.white70, fontSize: 16)),
+                Text(
+                  _isVideo ? 'Cuộc gọi video đến...' : 'Cuộc gọi thoại đến...',
+                  style: const TextStyle(color: Colors.white70, fontSize: 16),
+                ),
                 const Spacer(),
                 Padding(
                   padding: const EdgeInsets.only(bottom: 60),
@@ -133,8 +161,12 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
                     mainAxisAlignment: MainAxisAlignment.spaceEvenly,
                     children: [
                       _button(Icons.call_end, Colors.red, 'Từ chối', _decline),
-                      _button(_isVideo ? Icons.videocam : Icons.call, const Color(0xFF31A24C),
-                          'Trả lời', _accept),
+                      _button(
+                        _isVideo ? Icons.videocam : Icons.call,
+                        const Color(0xFF31A24C),
+                        'Trả lời',
+                        _accept,
+                      ),
                     ],
                   ),
                 ),
@@ -147,14 +179,19 @@ class _IncomingCallScreenState extends State<IncomingCallScreen> {
   }
 
   Widget _button(IconData icon, Color color, String label, VoidCallback onTap) {
-    return Column(children: [
-      GestureDetector(
-        onTap: onTap,
-        child: CircleAvatar(
-            radius: 34, backgroundColor: color, child: Icon(icon, color: Colors.white, size: 32)),
-      ),
-      const SizedBox(height: 8),
-      Text(label, style: const TextStyle(color: Colors.white)),
-    ]);
+    return Column(
+      children: [
+        GestureDetector(
+          onTap: onTap,
+          child: CircleAvatar(
+            radius: 34,
+            backgroundColor: color,
+            child: Icon(icon, color: Colors.white, size: 32),
+          ),
+        ),
+        const SizedBox(height: 8),
+        Text(label, style: const TextStyle(color: Colors.white)),
+      ],
+    );
   }
 }

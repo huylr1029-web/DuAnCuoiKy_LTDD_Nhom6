@@ -1,3 +1,5 @@
+import '../services/media_url.dart';
+
 DateTime _date(dynamic value) {
   if (value == null) return DateTime.now();
   return DateTime.tryParse(value.toString()) ?? DateTime.now();
@@ -41,7 +43,7 @@ class ChatItem {
         lastSenderId: (m['lastSenderId'] ?? '').toString(),
         updatedAt: _date(m['updatedAt']),
         isArchived: (m['isArchived'] as bool?) ?? false,
-        peerAvatarUrl: (m['peerAvatarUrl'] ?? '').toString(),
+        peerAvatarUrl: resolveMediaUrl((m['peerAvatarUrl'] ?? '').toString()),
       );
 }
 
@@ -71,7 +73,9 @@ class MessageItem {
         id: (m['id'] as num?)?.toInt() ?? 0,
         chatId: (m['chatId'] ?? '').toString(),
         senderId: (m['senderId'] ?? '').toString(),
-        text: (m['text'] ?? '').toString(),
+        text: const ['image', 'voice'].contains(m['type'])
+            ? resolveMediaUrl((m['text'] ?? '').toString())
+            : (m['text'] ?? '').toString(),
         type: (m['type'] ?? 'text').toString(),
         isVideo: (m['isVideo'] as bool?) ?? false,
         createdAt: _date(m['createdAt']),
@@ -190,7 +194,9 @@ class GroupChatMessageItem {
         groupChatId: (m['groupChatId'] ?? '').toString(),
         senderId: (m['senderId'] ?? '').toString(),
         senderName: (m['senderName'] ?? 'Ai đó').toString(),
-        text: (m['text'] ?? '').toString(),
+        text: const ['image', 'voice'].contains(m['type'])
+            ? resolveMediaUrl((m['text'] ?? '').toString())
+            : (m['text'] ?? '').toString(),
         type: (m['type'] ?? 'text').toString(),
         createdAt: _date(m['createdAt']),
       );
@@ -302,14 +308,14 @@ class ReelItem {
         authorId: (m['authorId'] ?? '').toString(),
         authorName: (m['authorName'] ?? 'Người dùng').toString(),
         caption: (m['caption'] ?? '').toString(),
-        imageUrl: (m['imageUrl'] ?? '').toString(),
+        imageUrl: resolveMediaUrl((m['imageUrl'] ?? '').toString()),
         musicUrl: m['musicUrl'] as String?,
         musicName: m['musicName'] as String?,
         createdAt: _date(m['createdAt']),
         likeCount: (m['likeCount'] as num?)?.toInt() ?? 0,
         likedByMe: (m['likedByMe'] as bool?) ?? false,
         commentCount: (m['commentCount'] as num?)?.toInt() ?? 0,
-        authorAvatarUrl: (m['authorAvatarUrl'] ?? '').toString(),
+        authorAvatarUrl: resolveMediaUrl((m['authorAvatarUrl'] ?? '').toString()),
       );
 
   ReelItem copyWith({int? likeCount, bool? likedByMe, int? commentCount}) => ReelItem(
@@ -348,7 +354,9 @@ class ReelCommentItem {
         reelId: (m['reelId'] as num?)?.toInt() ?? 0,
         authorId: (m['authorId'] ?? '').toString(),
         authorName: (m['authorName'] ?? 'Người dùng').toString(),
-        text: (m['text'] ?? '').toString(),
+        text: const ['image', 'voice'].contains(m['type'])
+            ? resolveMediaUrl((m['text'] ?? '').toString())
+            : (m['text'] ?? '').toString(),
         createdAt: _date(m['createdAt']),
       );
 }

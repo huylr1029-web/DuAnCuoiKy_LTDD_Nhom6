@@ -264,6 +264,30 @@ packages:
       url: "https://pub.dev"
     source: hosted
     version: "0.3.3+1"
+  google_mlkit_commons:
+    dependency: transitive
+    description:
+      name: google_mlkit_commons
+      sha256: "621e94de22fd0f1e902e593b892746d80ab7542b39c2552aa091d904eb82fc6f"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.13.0"
+  google_mlkit_language_id:
+    dependency: "direct main"
+    description:
+      name: google_mlkit_language_id
+      sha256: fff694b19ac14213731832b2683a07d5e68183d070a8821312bbf2210c132ed8
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.15.1"
+  google_mlkit_translation:
+    dependency: "direct main"
+    description:
+      name: google_mlkit_translation
+      sha256: "7404d9401ee3e5d60644da84244ba81a4a037d7857e6d849fb1bda4ae8ac5d98"
+      url: "https://pub.dev"
+    source: hosted
+    version: "0.15.1"
   google_sign_in:
     dependency: "direct main"
     description:
@@ -321,7 +345,7 @@ packages:
     source: hosted
     version: "1.6.0"
   http_parser:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: http_parser
       sha256: "178d74305e7866013777bab2c3d8726205dc5a4dd935297175b19a23a2e66571"
@@ -545,7 +569,7 @@ packages:
     source: hosted
     version: "1.18.3"
   mime:
-    dependency: transitive
+    dependency: "direct main"
     description:
       name: mime
       sha256: bd47de35f07e27267e69c8c8b22edf9473bfee170a60d60fcc93730c5144b7f6

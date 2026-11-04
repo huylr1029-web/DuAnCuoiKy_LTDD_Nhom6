@@ -9,6 +9,10 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^2.0.0
   http: ^1.2.0
+  http_parser: ^4.1.2
+  mime: ^2.1.0
+  google_mlkit_translation: ^0.15.1
+  google_mlkit_language_id: ^0.15.1
   shared_preferences: ^2.3.0
   signalr_netcore: ^1.4.4
   google_sign_in: ^7.2.0

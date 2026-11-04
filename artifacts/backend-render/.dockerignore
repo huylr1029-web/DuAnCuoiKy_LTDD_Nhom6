@@ -1,0 +1,10 @@
+**/bin/
+**/obj/
+.git/
+*.db
+*.db-shm
+*.db-wal
+wwwroot/uploads/
+appsettings.Development.json
+appsettings.Production.json
+.env*

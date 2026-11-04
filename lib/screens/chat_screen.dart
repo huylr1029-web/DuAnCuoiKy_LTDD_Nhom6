@@ -1,13 +1,16 @@
+import '../widgets/message_translation.dart';
+
 import 'dart:async';
 import 'dart:io';
 
 import 'package:flutter/material.dart';
-import 'package:geolocator/geolocator.dart';
+
+import '../services/location_service.dart';
+
 import 'package:image_picker/image_picker.dart';
 import 'package:intl/intl.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:record/record.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../models/api_models.dart';
 import '../models/app_user.dart';
@@ -30,8 +33,12 @@ class ChatScreen extends StatefulWidget {
 class _ChatScreenState extends State<ChatScreen> {
   final _chat = ChatService();
   final _input = TextEditingController();
-  late final String _chatId = ChatService.chatIdOf(_chat.myUid, widget.peer.uid);
+  late final String _chatId = ChatService.chatIdOf(
+    _chat.myUid,
+    widget.peer.uid,
+  );
   bool _hasText = false;
+  bool _autoTranslate = false;
 
   List<MessageItem> _messages = [];
   Map<int, List<({String userId, String emoji})>> _reactions = {};
@@ -60,7 +67,8 @@ class _ChatScreenState extends State<ChatScreen> {
       if (has != _hasText) setState(() => _hasText = has);
       if (has) {
         final now = DateTime.now();
-        if (_lastTypingSent == null || now.difference(_lastTypingSent!).inSeconds >= 2) {
+        if (_lastTypingSent == null ||
+            now.difference(_lastTypingSent!).inSeconds >= 2) {
           _lastTypingSent = now;
           _chat.sendTyping(widget.peer.uid);
         }
@@ -103,11 +111,25 @@ class _ChatScreenState extends State<ChatScreen> {
   Future<void> _refreshTyping() async {
     try {
       final typing = await _chat.isPeerTyping(widget.peer.uid);
-      if (mounted && typing != _peerTyping) setState(() => _peerTyping = typing);
+      if (mounted && typing != _peerTyping) {
+        setState(() => _peerTyping = typing);
+      }
     } catch (_) {}
   }
 
+  bool _fetchingMessages = false;
+
   Future<void> _loadMessages({bool silent = false}) async {
+    if (_fetchingMessages) return;
+    _fetchingMessages = true;
+    try {
+      await _fetchMessages(silent: silent);
+    } finally {
+      _fetchingMessages = false;
+    }
+  }
+
+  Future<void> _fetchMessages({bool silent = false}) async {
     final requestVersion = ++_loadVersion;
     if (!silent && mounted) setState(() => _loading = true);
     try {
@@ -161,16 +183,29 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ),
         actions: [
+          IconButton(
+            tooltip: _autoTranslate
+                ? 'Tắt dịch tự động'
+                : 'Tự dịch tin nhắn đến',
+            icon: Icon(
+              Icons.translate,
+              color: _autoTranslate ? Colors.green : Colors.grey,
+            ),
+            onPressed: () => setState(() => _autoTranslate = !_autoTranslate),
+          ),
           if (_nickname != null)
             TextButton(
-                onPressed: () => Navigator.pop(context, 'clear'),
-                child: const Text('Xóa biệt danh')),
+              onPressed: () => Navigator.pop(context, 'clear'),
+              child: const Text('Xóa biệt danh'),
+            ),
           TextButton(
-              onPressed: () => Navigator.pop(context, null),
-              child: const Text('Hủy')),
+            onPressed: () => Navigator.pop(context, null),
+            child: const Text('Hủy'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(context, 'save'),
-              child: const Text('Lưu')),
+            onPressed: () => Navigator.pop(context, 'save'),
+            child: const Text('Lưu'),
+          ),
         ],
       ),
     );
@@ -219,9 +254,9 @@ class _ChatScreenState extends State<ChatScreen> {
     } catch (e) {
       debugPrint('Send message failed: $e');
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Không gửi được tin nhắn: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Không gửi được tin nhắn: $e')));
       }
     } finally {
       if (mounted) setState(() => _sending = false);
@@ -230,38 +265,40 @@ class _ChatScreenState extends State<ChatScreen> {
 
   Future<void> _sendImage() async {
     try {
-      final picked = await ImagePicker().pickImage(source: ImageSource.gallery, imageQuality: 85);
-      if (picked == null) return;
+      final picked = await ImagePicker().pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 85,
+      );
+      if (picked == null || !mounted) return;
       final bytes = await picked.readAsBytes();
       final name = picked.name.isEmpty ? 'image.jpg' : picked.name;
-      final contentType = name.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
+      final contentType = name.toLowerCase().endsWith('.png')
+          ? 'image/png'
+          : 'image/jpeg';
       await _chat.sendImageMessage(widget.peer, name, bytes, contentType);
       await _loadMessages(silent: true);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không gửi được hình ảnh: $e')));
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Không gửi được hình ảnh: $e')));
       }
     }
   }
 
   Future<void> _sendLocation() async {
     try {
-      var permission = await Geolocator.checkPermission();
-      if (permission == LocationPermission.denied) {
-        permission = await Geolocator.requestPermission();
-      }
-      if (permission == LocationPermission.denied || permission == LocationPermission.deniedForever) {
-        if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cần cấp quyền vị trí để gửi vị trí.')));
-        }
-        return;
-      }
-      final position = await Geolocator.getCurrentPosition(locationSettings: const LocationSettings(accuracy: LocationAccuracy.high));
-      await _chat.sendLocationMessage(widget.peer, position.latitude, position.longitude);
+      final position = await LocationService.currentPosition();
+      await _chat.sendLocationMessage(
+        widget.peer,
+        position.latitude,
+        position.longitude,
+      );
       await _loadMessages(silent: true);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không lấy được vị trí: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Không lấy được vị trí: $e')));
       }
     }
   }
@@ -274,11 +311,18 @@ class _ChatScreenState extends State<ChatScreen> {
         if (path == null) return;
         final file = await _readVoiceFile(path);
         if (file == null) return;
-        await _chat.sendVoiceMessage(widget.peer, 'voice.m4a', file, 'audio/m4a');
+        await _chat.sendVoiceMessage(
+          widget.peer,
+          'voice.m4a',
+          file,
+          'audio/m4a',
+        );
         await _loadMessages(silent: true);
       } catch (e) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không gửi được tin nhắn thoại: $e')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Không gửi được tin nhắn thoại: $e')),
+          );
         }
       }
       return;
@@ -286,17 +330,26 @@ class _ChatScreenState extends State<ChatScreen> {
     try {
       if (!await _recorder.hasPermission()) {
         if (mounted) {
-          ScaffoldMessenger.of(context).showSnackBar(const SnackBar(content: Text('Cần cấp quyền micro để ghi âm.')));
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(content: Text('Cần cấp quyền micro để ghi âm.')),
+          );
         }
         return;
       }
       await _recorder.start(
-          const RecordConfig(encoder: AudioEncoder.aacLc, sampleRate: 44100, bitRate: 128000),
-          path: '${Directory.systemTemp.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a');
+        const RecordConfig(
+          encoder: AudioEncoder.aacLc,
+          sampleRate: 44100,
+          bitRate: 128000,
+        ),
+        path:
+            '${Directory.systemTemp.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a',
+      );
       if (mounted) setState(() => _recording = true);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không ghi âm được: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Không ghi âm được: $e')));
       }
     }
   }
@@ -317,34 +370,41 @@ class _ChatScreenState extends State<ChatScreen> {
         return;
       }
       await _voicePlayer.setUrl(m.text);
-      await _voicePlayer.play();
       if (mounted) setState(() => _playingVoiceId = m.id);
-      _voicePlayer.playerStateStream.firstWhere((s) => s.processingState == ProcessingState.completed).then((_) {
-        if (mounted && _playingVoiceId == m.id) setState(() => _playingVoiceId = null);
-      });
+      unawaited(_voicePlayer.play());
+      _voicePlayer.playerStateStream
+          .firstWhere((s) => s.processingState == ProcessingState.completed)
+          .then((_) {
+            if (mounted && _playingVoiceId == m.id) {
+              setState(() => _playingVoiceId = null);
+            }
+          });
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không phát được tin nhắn thoại: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Không phát được tin nhắn thoại: $e')),
+        );
       }
     }
   }
 
   Future<void> _openMap(String text) async {
-    final parts = text.split(',');
-    if (parts.length < 2) return;
-    final uri = Uri.parse('https://maps.google.com/?q=${parts[0].trim()},${parts[1].trim()}');
     try {
-      await launchUrl(uri, mode: LaunchMode.externalApplication);
+      await LocationService.openMap(text);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Không mở được bản đồ: $e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Không mở được bản đồ: $e')));
       }
     }
   }
 
   Future<void> _pickReaction(MessageItem m) async {
     const emojis = ['👍', '❤️', '😂', '😮', '😢', '😡', '🔥'];
-    final myEmoji = _reactions[m.id]?.where((r) => r.userId == _chat.myUid).map((r) => r.emoji).firstOrNull;
+    final myEmoji = _reactions[m.id]
+        ?.where((r) => r.userId == _chat.myUid)
+        .map((r) => r.emoji)
+        .firstOrNull;
     final action = await showModalBottomSheet<String>(
       context: context,
       builder: (context) => SafeArea(
@@ -353,12 +413,17 @@ class _ChatScreenState extends State<ChatScreen> {
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              ...emojis.map((e) => GestureDetector(
-                onTap: () => Navigator.pop(context, e),
-                child: Text(e, style: const TextStyle(fontSize: 32)),
-              )),
+              ...emojis.map(
+                (e) => GestureDetector(
+                  onTap: () => Navigator.pop(context, e),
+                  child: Text(e, style: const TextStyle(fontSize: 32)),
+                ),
+              ),
               if (myEmoji != null)
-                TextButton(onPressed: () => Navigator.pop(context, 'clear'), child: const Text('Gỡ')),
+                TextButton(
+                  onPressed: () => Navigator.pop(context, 'clear'),
+                  child: const Text('Gỡ'),
+                ),
             ],
           ),
         ),
@@ -374,7 +439,8 @@ class _ChatScreenState extends State<ChatScreen> {
       await _loadMessages(silent: true);
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('$e')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$e')));
       }
     }
   }
@@ -390,32 +456,48 @@ class _ChatScreenState extends State<ChatScreen> {
       padding: const EdgeInsets.only(top: 2),
       child: Wrap(
         spacing: 4,
-        children: grouped.entries.map((e) => Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-          decoration: BoxDecoration(color: Colors.white, border: Border.all(color: Colors.grey.shade300), borderRadius: BorderRadius.circular(12)),
-          child: Text('${e.key} ${e.value}', style: const TextStyle(fontSize: 12)),
-        )).toList(),
+        children: grouped.entries
+            .map(
+              (e) => Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: Colors.white,
+                  border: Border.all(color: Colors.grey.shade300),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Text(
+                  '${e.key} ${e.value}',
+                  style: const TextStyle(fontSize: 12),
+                ),
+              ),
+            )
+            .toList(),
       ),
     );
   }
 
   Future<void> _call(bool isVideo) async {
     try {
-      final callId =
-      await CallService().startCall(peer: widget.peer, isVideo: isVideo);
+      final callId = await CallService().startCall(
+        peer: widget.peer,
+        isVideo: isVideo,
+      );
       if (!mounted) return;
       Navigator.push(
         context,
         MaterialPageRoute(
           builder: (_) => CallScreen(
-              callId: callId, peer: widget.peer, isVideo: isVideo, isCaller: true),
+            callId: callId,
+            peer: widget.peer,
+            isVideo: isVideo,
+            isCaller: true,
+          ),
         ),
       );
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Không gọi được: $e')),
-        );
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('Không gọi được: $e')));
       }
     }
   }
@@ -425,32 +507,57 @@ class _ChatScreenState extends State<ChatScreen> {
     return Scaffold(
       appBar: AppBar(
         titleSpacing: 0,
-        title: Row(children: [
-          Avatar(name: _displayName, radius: 18, online: _peerOnline),
-          const SizedBox(width: 10),
-          Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text(_displayName,
-                  overflow: TextOverflow.ellipsis,
-                  style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w600)),
-              Text(_peerTyping ? 'Đang nhập...' : (_peerOnline ? 'Đang hoạt động' : 'Không hoạt động'),
-                  style: TextStyle(fontSize: 12, color: _peerTyping ? AppColors.primary : Colors.grey)),
-            ]),
-          ),
-        ]),
+        title: Row(
+          children: [
+            Avatar(
+              name: _displayName,
+              radius: 18,
+              online: _peerOnline,
+              imageUrl: widget.peer.avatarUrl,
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    _displayName,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                  Text(
+                    _peerTyping
+                        ? 'Đang nhập...'
+                        : (_peerOnline ? 'Đang hoạt động' : 'Không hoạt động'),
+                    style: TextStyle(
+                      fontSize: 12,
+                      color: _peerTyping ? AppColors.primary : Colors.grey,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
         actions: [
           IconButton(
-              icon: const Icon(Icons.edit_outlined, color: AppColors.primary),
-              tooltip: 'Đổi biệt danh',
-              onPressed: _editNickname),
+            icon: const Icon(Icons.edit_outlined, color: AppColors.primary),
+            tooltip: 'Đổi biệt danh',
+            onPressed: _editNickname,
+          ),
           IconButton(
-              icon: const Icon(Icons.call, color: AppColors.primary),
-              tooltip: 'Gọi thoại',
-              onPressed: () => _call(false)),
+            icon: const Icon(Icons.call, color: AppColors.primary),
+            tooltip: 'Gọi thoại',
+            onPressed: () => _call(false),
+          ),
           IconButton(
-              icon: const Icon(Icons.videocam, color: AppColors.primary),
-              tooltip: 'Gọi video',
-              onPressed: () => _call(true)),
+            icon: const Icon(Icons.videocam, color: AppColors.primary),
+            tooltip: 'Gọi video',
+            onPressed: () => _call(true),
+          ),
         ],
       ),
       body: Column(
@@ -462,22 +569,28 @@ class _ChatScreenState extends State<ChatScreen> {
                 ? Center(child: Text('Lỗi: $_error'))
                 : _messages.isEmpty
                 ? EmptyState(
-              icon: Icons.waving_hand_rounded,
-              title: _displayName,
-              subtitle: 'Hãy gửi lời chào 👋 để bắt đầu trò chuyện.',
-            )
+                    icon: Icons.waving_hand_rounded,
+                    title: _displayName,
+                    subtitle: 'Hãy gửi lời chào 👋 để bắt đầu trò chuyện.',
+                  )
                 : ListView.builder(
-              reverse: true, // tin moi nhat o duoi cung
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 10, vertical: 8),
-              itemCount: _messages.length,
-              itemBuilder: (_, i) => _buildMessage(_messages[i]),
-            ),
+                    reverse: true, // tin moi nhat o duoi cung
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: 10,
+                      vertical: 8,
+                    ),
+                    itemCount: _messages.length,
+                    itemBuilder: (_, i) => _buildMessage(_messages[i]),
+                  ),
           ),
           if (_recording)
             const Padding(
               padding: EdgeInsets.symmetric(vertical: 4),
-              child: Text('Đang ghi âm... bấm nút mic lại để gửi', style: TextStyle(color: Colors.red), textAlign: TextAlign.center),
+              child: Text(
+                'Đang ghi âm... bấm nút mic lại để gửi',
+                style: TextStyle(color: Colors.red),
+                textAlign: TextAlign.center,
+              ),
             ),
           _buildInputBar(),
         ],
@@ -500,22 +613,37 @@ class _ChatScreenState extends State<ChatScreen> {
             margin: const EdgeInsets.symmetric(vertical: 4),
             padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
             decoration: BoxDecoration(
-                color: AppColors.bubbleOther,
-                borderRadius: BorderRadius.circular(18)),
-            child: Row(mainAxisSize: MainAxisSize.min, children: [
-              CircleAvatar(
-                radius: 16,
-                backgroundColor: missed ? Colors.red : Colors.grey.shade400,
-                child: Icon(m.isVideo ? Icons.videocam : Icons.call,
-                    size: 18, color: Colors.white),
-              ),
-              const SizedBox(width: 10),
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Text(m.text, style: const TextStyle(fontWeight: FontWeight.w600)),
-                const Text('Bấm để gọi lại',
-                    style: TextStyle(fontSize: 12, color: Colors.grey)),
-              ]),
-            ]),
+              color: AppColors.bubbleOther,
+              borderRadius: BorderRadius.circular(18),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                CircleAvatar(
+                  radius: 16,
+                  backgroundColor: missed ? Colors.red : Colors.grey.shade400,
+                  child: Icon(
+                    m.isVideo ? Icons.videocam : Icons.call,
+                    size: 18,
+                    color: Colors.white,
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      m.text,
+                      style: const TextStyle(fontWeight: FontWeight.w600),
+                    ),
+                    const Text(
+                      'Bấm để gọi lại',
+                      style: TextStyle(fontSize: 12, color: Colors.grey),
+                    ),
+                  ],
+                ),
+              ],
+            ),
           ),
         ),
       );
@@ -529,55 +657,114 @@ class _ChatScreenState extends State<ChatScreen> {
       content = Container(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
         decoration: BoxDecoration(
-            color: isMe ? AppColors.primary : AppColors.bubbleOther, borderRadius: BorderRadius.circular(18)),
-        child: Row(mainAxisSize: MainAxisSize.min, children: [
-          IconButton(
-            icon: Icon(playing ? Icons.stop : Icons.play_arrow, color: isMe ? Colors.white : Colors.black87),
-            onPressed: () => _toggleVoicePlay(m),
-          ),
-          Text('Tin nhắn thoại', style: TextStyle(color: isMe ? Colors.white : Colors.black87)),
-        ]),
+          color: isMe ? AppColors.primary : AppColors.bubbleOther,
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            IconButton(
+              icon: Icon(
+                playing ? Icons.stop : Icons.play_arrow,
+                color: isMe ? Colors.white : Colors.black87,
+              ),
+              onPressed: () => _toggleVoicePlay(m),
+            ),
+            Text(
+              'Tin nhắn thoại',
+              style: TextStyle(color: isMe ? Colors.white : Colors.black87),
+            ),
+          ],
+        ),
       );
     } else if (m.type == 'image') {
       content = GestureDetector(
         onTap: () {
           showDialog(
             context: context,
-            builder: (context) => Dialog(child: Image.network(text, errorBuilder: (context, error, stack) => const Icon(Icons.broken_image_outlined))),
+            builder: (context) => Dialog(
+              child: Image.network(
+                text,
+                errorBuilder: (context, error, stack) =>
+                    const Icon(Icons.broken_image_outlined),
+              ),
+            ),
           );
         },
         child: ClipRRect(
           borderRadius: BorderRadius.circular(12),
-          child: Image.network(text, width: 220, fit: BoxFit.cover,
-              errorBuilder: (context, error, stack) => const Icon(Icons.broken_image_outlined)),
+          child: Image.network(
+            text,
+            width: 220,
+            fit: BoxFit.cover,
+            errorBuilder: (context, error, stack) =>
+                const Icon(Icons.broken_image_outlined),
+          ),
         ),
       );
     } else if (m.type == 'location') {
       content = Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
-            color: isMe ? AppColors.primary : AppColors.bubbleOther, borderRadius: BorderRadius.circular(18)),
-        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Row(children: [
-            Icon(Icons.location_on, color: isMe ? Colors.white : Colors.red),
-            const SizedBox(width: 6),
-            Expanded(child: Text('Vị trí: $text', style: TextStyle(color: isMe ? Colors.white : Colors.black87, fontWeight: FontWeight.w600))),
-          ]),
-          const SizedBox(height: 6),
-          TextButton(
-            onPressed: () => _openMap(text),
-            style: TextButton.styleFrom(padding: EdgeInsets.zero, minimumSize: Size.zero),
-            child: Text('Mở bản đồ', style: TextStyle(color: isMe ? Colors.white : AppColors.primary)),
-          ),
-        ]),
+          color: isMe ? AppColors.primary : AppColors.bubbleOther,
+          borderRadius: BorderRadius.circular(18),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  Icons.location_on,
+                  color: isMe ? Colors.white : Colors.red,
+                ),
+                const SizedBox(width: 6),
+                Expanded(
+                  child: Text(
+                    'Vị trí: $text',
+                    style: TextStyle(
+                      color: isMe ? Colors.white : Colors.black87,
+                      fontWeight: FontWeight.w600,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            TextButton(
+              onPressed: () => _openMap(text),
+              style: TextButton.styleFrom(
+                padding: EdgeInsets.zero,
+                minimumSize: Size.zero,
+              ),
+              child: Text(
+                'Mở bản đồ',
+                style: TextStyle(
+                  color: isMe ? Colors.white : AppColors.primary,
+                ),
+              ),
+            ),
+          ],
+        ),
       );
     } else {
       content = Container(
-        padding: onlyEmoji ? EdgeInsets.zero : const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
+        padding: onlyEmoji
+            ? EdgeInsets.zero
+            : const EdgeInsets.symmetric(horizontal: 14, vertical: 9),
         decoration: onlyEmoji
             ? null
-            : BoxDecoration(color: isMe ? AppColors.primary : AppColors.bubbleOther, borderRadius: BorderRadius.circular(18)),
-        child: Text(text, style: TextStyle(fontSize: onlyEmoji ? 40 : 15, color: isMe ? Colors.white : Colors.black87)),
+            : BoxDecoration(
+                color: isMe ? AppColors.primary : AppColors.bubbleOther,
+                borderRadius: BorderRadius.circular(18),
+              ),
+        child: Text(
+          text,
+          style: TextStyle(
+            fontSize: onlyEmoji ? 40 : 15,
+            color: isMe ? Colors.white : Colors.black87,
+          ),
+        ),
       );
     }
     return Align(
@@ -588,16 +775,32 @@ class _ChatScreenState extends State<ChatScreen> {
           onLongPress: () => _pickReaction(m),
           child: Container(
             margin: const EdgeInsets.symmetric(vertical: 2),
-            constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.72),
+            constraints: BoxConstraints(
+              maxWidth: MediaQuery.of(context).size.width * 0.72,
+            ),
             child: Column(
-              crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+              crossAxisAlignment: isMe
+                  ? CrossAxisAlignment.end
+                  : CrossAxisAlignment.start,
               children: [
                 content,
+                if (!isMe && m.type == 'text' && text.trim().isNotEmpty)
+                  MessageTranslation(
+                    key: ValueKey('translate-${m.id}'),
+                    text: text,
+                    automatic: _autoTranslate,
+                  ),
                 _reactionChips(m),
-                if (isMe && _messages.isNotEmpty && m.id == _messages.first.id && m.type != 'call')
+                if (isMe &&
+                    _messages.isNotEmpty &&
+                    m.id == _messages.first.id &&
+                    m.type != 'call')
                   Padding(
                     padding: const EdgeInsets.only(top: 2, right: 4),
-                    child: Text(m.isRead ? 'Đã xem' : 'Đã gửi', style: const TextStyle(fontSize: 11, color: Colors.grey)),
+                    child: Text(
+                      m.isRead ? 'Đã xem' : 'Đã gửi',
+                      style: const TextStyle(fontSize: 11, color: Colors.grey),
+                    ),
                   ),
               ],
             ),
@@ -611,41 +814,74 @@ class _ChatScreenState extends State<ChatScreen> {
     return SafeArea(
       top: false,
       child: Container(
-        decoration: const BoxDecoration(color: Colors.white, border: Border(top: BorderSide(color: AppColors.border)), boxShadow: [BoxShadow(color: Color(0x14000000), blurRadius: 12, offset: Offset(0, -4))]),
+        decoration: const BoxDecoration(
+          color: Colors.white,
+          border: Border(top: BorderSide(color: AppColors.border)),
+          boxShadow: [
+            BoxShadow(
+              color: Color(0x14000000),
+              blurRadius: 12,
+              offset: Offset(0, -4),
+            ),
+          ],
+        ),
         padding: const EdgeInsets.fromLTRB(8, 4, 4, 8),
-        child: Row(children: [
-          IconButton(icon: const Icon(Icons.image_outlined, color: Colors.grey), tooltip: 'Gửi hình ảnh', onPressed: _sendImage),
-          IconButton(icon: const Icon(Icons.location_on_outlined, color: Colors.grey), tooltip: 'Gửi vị trí', onPressed: _sendLocation),
-          IconButton(
-            icon: Icon(_recording ? Icons.mic : Icons.mic_outlined, color: _recording ? Colors.red : Colors.grey),
-            tooltip: _recording ? 'Bấm lại để gửi tin nhắn thoại' : 'Ghi âm tin nhắn thoại',
-            onPressed: _toggleRecording,
-          ),
-          Expanded(
-            child: TextField(
-              controller: _input,
-              textCapitalization: TextCapitalization.sentences,
-              minLines: 1,
-              maxLines: 4,
-              onSubmitted: (_) => _send(),
-              decoration: InputDecoration(
-                hintText: 'Nhắn tin',
-                filled: true,
-                fillColor: AppColors.inputFill,
-                contentPadding:
-                const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-                border: OutlineInputBorder(
+        child: Row(
+          children: [
+            IconButton(
+              icon: const Icon(Icons.image_outlined, color: Colors.grey),
+              tooltip: 'Gửi hình ảnh',
+              onPressed: _sendImage,
+            ),
+            IconButton(
+              icon: const Icon(Icons.location_on_outlined, color: Colors.grey),
+              tooltip: 'Gửi vị trí',
+              onPressed: _sendLocation,
+            ),
+            IconButton(
+              icon: Icon(
+                _recording ? Icons.mic : Icons.mic_outlined,
+                color: _recording ? Colors.red : Colors.grey,
+              ),
+              tooltip: _recording
+                  ? 'Bấm lại để gửi tin nhắn thoại'
+                  : 'Ghi âm tin nhắn thoại',
+              onPressed: _toggleRecording,
+            ),
+            Expanded(
+              child: TextField(
+                controller: _input,
+                textCapitalization: TextCapitalization.sentences,
+                minLines: 1,
+                maxLines: 4,
+                onSubmitted: (_) => _send(),
+                decoration: InputDecoration(
+                  hintText: 'Nhắn tin',
+                  filled: true,
+                  fillColor: AppColors.inputFill,
+                  contentPadding: const EdgeInsets.symmetric(
+                    horizontal: 16,
+                    vertical: 10,
+                  ),
+                  border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide.none),
+                    borderSide: BorderSide.none,
+                  ),
+                ),
               ),
             ),
-          ),
-          // Giong Messenger: o trong -> nut 👍, co chu -> nut gui
-          IconButton(
-            icon: Icon(_hasText ? Icons.send : Icons.thumb_up, color: AppColors.primary),
-            onPressed: _sending ? null : () => _hasText ? _send() : _send('👍'),
-          ),
-        ]),
+            // Giong Messenger: o trong -> nut 👍, co chu -> nut gui
+            IconButton(
+              icon: Icon(
+                _hasText ? Icons.send : Icons.thumb_up,
+                color: AppColors.primary,
+              ),
+              onPressed: _sending
+                  ? null
+                  : () => _hasText ? _send() : _send('👍'),
+            ),
+          ],
+        ),
       ),
     );
   }
